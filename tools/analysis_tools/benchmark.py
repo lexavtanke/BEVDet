@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
+sys.path.insert(0, '/root/workspace/BEVDET')
+
 import argparse
 import time
 

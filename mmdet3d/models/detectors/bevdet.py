@@ -511,6 +511,71 @@ class BEVDet4D(BEVDet):
 
 
 @DETECTORS.register_module()
+class BEVDet4DTRT(BEVDet4D):
+    def result_serialize(self, outs):
+        outs_ = []
+        for out in outs:
+            for key in ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']:
+                outs_.append(out[0][key])
+        return outs_
+
+    def result_deserialize(self, outs):
+        outs_ = []
+        keys = ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']
+        for head_id in range(len(outs) // 6):
+            outs_head = [dict()]
+            for kid, key in enumerate(keys):
+                outs_head[0][key] = outs[head_id * 6 + kid]
+            outs_.append(outs_head)
+        return outs_
+    
+    def forward(
+        self,
+        img,
+        ranks_depth,
+        ranks_feat,
+        ranks_bev,
+        interval_starts,
+        interval_lengths,
+    ):
+        # actually logic is to get batch of images 
+        # extract features from each of them 
+        # alight features with ego transform information
+        # concatenate 
+
+
+        # example from bevdet
+        x = self.img_backbone(img)
+        x = self.img_neck(x)
+        x = self.img_view_transformer.depth_net(x)
+        depth = x[:, :self.img_view_transformer.D].softmax(dim=1)
+        tran_feat = x[:, self.img_view_transformer.D:(
+            self.img_view_transformer.D +
+            self.img_view_transformer.out_channels)]
+        tran_feat = tran_feat.permute(0, 2, 3, 1)
+        x = TRTBEVPoolv2.apply(depth.contiguous(), tran_feat.contiguous(),
+                               ranks_depth, ranks_feat, ranks_bev,
+                               interval_starts, interval_lengths)
+        x = x.permute(0, 3, 1, 2).contiguous()
+
+        bev_feat = self.bev_encoder(x)
+        outs = self.pts_bbox_head([bev_feat])
+        outs = self.result_serialize(outs)
+        return outs
+    
+    def get_bev_pool_input(self, input):
+        input = self.prepare_inputs(input)
+        print('________________________________')
+        print(f'type is {type(input[0][0])}')
+        print(input[0][0].shape)
+        for inp in input:
+            print(f'input type is {type(inp)}')
+        print(f'input len is {len(input)}')
+        coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
+        return self.img_view_transformer.voxel_pooling_prepare_v2(coor)
+
+
+@DETECTORS.register_module()
 class BEVDepth4D(BEVDet4D):
 
     def forward_train(self,
@@ -666,7 +731,8 @@ class BEVStereo4D(BEVDepth4D):
                 feat_prev_iv = feat_curr_iv
         if pred_prev:
             # Todo
-            assert False
+            # assert False
+            pass
         if not self.with_prev:
             bev_feat_key = bev_feat_list[0]
             if len(bev_feat_key.shape) ==4:

@@ -133,3 +133,8 @@ class BEVStereo4DOCC(BEVStereo4D):
         loss_occ = self.loss_single(voxel_semantics, mask_camera, occ_pred)
         losses.update(loss_occ)
         return losses
+
+
+@DETECTORS.register_module()
+class BEVStereo4DOCCTRT(BEVStereo4D):
+    pass

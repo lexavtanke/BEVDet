@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, '/root/workspace/BEVDET')
 import time
 from typing import Dict, Optional, Sequence, Union
 

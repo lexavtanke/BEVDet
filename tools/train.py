@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import division
+import sys
+sys.path.insert(0, '/root/workspace/BEVDET')
+
 import argparse
 import copy
 import os

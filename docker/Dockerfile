@@ -103,7 +103,7 @@ RUN pip install mmdet==2.25.1 mmsegmentation==0.25.0  -i https://pypi.tuna.tsing
 RUN pip install pycuda \
     lyft_dataset_sdk \
     networkx==2.2 \
-    numba==0.53.0 \
+    numba==0.56.4 \
     numpy \
     nuscenes-devkit \
     plyfile \

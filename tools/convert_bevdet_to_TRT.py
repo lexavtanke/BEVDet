@@ -1,3 +1,6 @@
+import sys
+sys.path.insert(0, '/root/workspace/BEVDET')
+
 import argparse
 
 import torch.onnx
@@ -354,6 +357,8 @@ def main():
 
     for i, data in enumerate(data_loader):
         inputs = [t.cuda() for t in data['img_inputs'][0]]
+        print('==================')
+        print(len(inputs))
         metas = model.get_bev_pool_input(inputs)
         img = inputs[0].squeeze(0)
         with torch.no_grad():
