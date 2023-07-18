@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument('checkpoint', help='checkpoint file')
     parser.add_argument('work_dir', help='work dir to save file')
     parser.add_argument(
-        '--prefix', default='bevdet', help='prefix of the save file name')
+        '--prefix', default='bevdet4d', help='prefix of the save file name')
     parser.add_argument(
         '--fp16', action='store_true', help='Whether to use tensorrt fp16')
     parser.add_argument(
@@ -375,12 +375,11 @@ def main():
         with torch.no_grad():
             feat_prev, inputs = model.extract_img_feat(
                 inputs, pred_prev=True, img_metas=None)
-        
+        print(f'feat_prev shape is {feat_prev.shape}')
         with torch.no_grad():
             torch.onnx.export(
                 model,
                 (img.float().contiguous(), feat_prev.float().contiguous(),
-                 sensor2keyegos, bda, 
                  metas[1].int().contiguous(),
                  metas[2].int().contiguous(), metas[0].int().contiguous(),
                  metas[3].int().contiguous(), metas[4].int().contiguous()),
@@ -394,78 +393,85 @@ def main():
                               range(6 * len(model.pts_bbox_head.task_heads))])
         break
     # check onnx model
-    # onnx_model = onnx.load(args.work_dir + model_prefix + '.onnx')
-    # try:
-    #     onnx.checker.check_model(onnx_model)
-    # except Exception:
-    #     print('ONNX Model Incorrect')
-    # else:
-    #     print('ONNX Model Correct')
+    onnx_model = onnx.load(args.work_dir + model_prefix + '.onnx')
+    try:
+        onnx.checker.check_model(onnx_model)
+    except Exception:
+        print('ONNX Model Incorrect')
+    else:
+        print('ONNX Model Correct')
 
-    # # convert to tensorrt
-    # num_points = metas[0].shape[0]
-    # num_intervals = metas[3].shape[0]
-    # img_shape = img.shape
-    # input_shapes = dict(
-    #     img=dict(
-    #         min_shape=img_shape, opt_shape=img_shape, max_shape=img_shape),
-    #     ranks_depth=dict(
-    #         min_shape=[num_points],
-    #         opt_shape=[num_points],
-    #         max_shape=[num_points]),
-    #     ranks_feat=dict(
-    #         min_shape=[num_points],
-    #         opt_shape=[num_points],
-    #         max_shape=[num_points]),
-    #     ranks_bev=dict(
-    #         min_shape=[num_points],
-    #         opt_shape=[num_points],
-    #         max_shape=[num_points]),
-    #     interval_starts=dict(
-    #         min_shape=[num_intervals],
-    #         opt_shape=[num_intervals],
-    #         max_shape=[num_intervals]),
-    #     interval_lengths=dict(
-    #         min_shape=[num_intervals],
-    #         opt_shape=[num_intervals],
-    #         max_shape=[num_intervals]))
-    # deploy_cfg = dict(
-    #     backend_config=dict(
-    #         type='tensorrt',
-    #         common_config=dict(
-    #             fp16_mode=args.fp16,
-    #             max_workspace_size=1073741824,
-    #             int8_mode=args.int8),
-    #         model_inputs=[dict(input_shapes=input_shapes)]),
-    #     codebase_config=dict(
-    #         type='mmdet3d', task='VoxelDetection', model_type='end2end'))
+    # convert to tensorrt
+    num_points = metas[0].shape[0]
+    num_intervals = metas[3].shape[0]
+    img_shape = img.shape
+    feat_prev_shape = feat_prev.shape
+    print('input_shapes')
+    input_shapes = dict(
+        img=dict(
+            min_shape=img_shape, opt_shape=img_shape, max_shape=img_shape),
+        feat_prev=dict(
+            min_shape=feat_prev_shape, opt_shape=feat_prev_shape, max_shape=feat_prev_shape),
+        ranks_depth=dict(
+            min_shape=[num_points],
+            opt_shape=[num_points],
+            max_shape=[num_points]),
+        ranks_feat=dict(
+            min_shape=[num_points],
+            opt_shape=[num_points],
+            max_shape=[num_points]),
+        ranks_bev=dict(
+            min_shape=[num_points],
+            opt_shape=[num_points],
+            max_shape=[num_points]),
+        interval_starts=dict(
+            min_shape=[num_intervals],
+            opt_shape=[num_intervals],
+            max_shape=[num_intervals]),
+        interval_lengths=dict(
+            min_shape=[num_intervals],
+            opt_shape=[num_intervals],
+            max_shape=[num_intervals]))
+    print('deploy_cfg')
+    deploy_cfg = dict(
+        backend_config=dict(
+            type='tensorrt',
+            common_config=dict(
+                fp16_mode=args.fp16,
+                max_workspace_size=1073741824,
+                int8_mode=args.int8),
+            model_inputs=[dict(input_shapes=input_shapes)]),
+        codebase_config=dict(
+            type='mmdet3d', task='VoxelDetection', model_type='end2end'))
 
-    # if args.int8:
-    #     calib_filename = 'calib_data.h5'
-    #     calib_path = os.path.join(args.work_dir, calib_filename)
-    #     create_calib_input_data(
-    #         calib_path,
-    #         deploy_cfg,
-    #         args.config,
-    #         args.checkpoint,
-    #         dataset_cfg=None,
-    #         dataset_type='val',
-    #         device='cuda:0',
-    #         metas=metas)
+    if args.int8:
+        print('if int8')
+        calib_filename = 'calib_data.h5'
+        calib_path = os.path.join(args.work_dir, calib_filename)
+        create_calib_input_data(
+            calib_path,
+            deploy_cfg,
+            args.config,
+            args.checkpoint,
+            dataset_cfg=None,
+            dataset_type='val',
+            device='cuda:0',
+            metas=metas)
+    
+    print('from_onnx')
+    from_onnx(
+        args.work_dir + model_prefix + '.onnx',
+        args.work_dir + model_prefix,
+        fp16_mode=args.fp16,
+        int8_mode=args.int8,
+        int8_param=dict(
+            calib_file=os.path.join(args.work_dir, 'calib_data.h5'),
+            model_type='end2end'),
+        max_workspace_size=1 << 30,
+        input_shapes=input_shapes)
 
-    # from_onnx(
-    #     args.work_dir + model_prefix + '.onnx',
-    #     args.work_dir + model_prefix,
-    #     fp16_mode=args.fp16,
-    #     int8_mode=args.int8,
-    #     int8_param=dict(
-    #         calib_file=os.path.join(args.work_dir, 'calib_data.h5'),
-    #         model_type='end2end'),
-    #     max_workspace_size=1 << 30,
-    #     input_shapes=input_shapes)
-
-    # if args.int8:
-    #     os.remove(calib_path)
+    if args.int8:
+        os.remove(calib_path)
 
 
 if __name__ == '__main__':
