@@ -288,6 +288,7 @@ class BEVDet4D(BEVDet):
         self.grid = None
 
     def gen_grid(self, input, sensor2keyegos, bda, bda_adj=None):
+        print("gen_grid")
         n, c, h, w = input.shape
         _, v, _, _ = sensor2keyegos[0].shape
         if self.grid is None:
@@ -356,12 +357,14 @@ class BEVDet4D(BEVDet):
 
     @force_fp32()
     def shift_feature(self, input, sensor2keyegos, bda, bda_adj=None):
+        print('shift_feature')
         grid = self.gen_grid(input, sensor2keyegos, bda, bda_adj=bda_adj)
         output = F.grid_sample(input, grid.to(input.dtype), align_corners=True)
         return output
 
     def prepare_bev_feat(self, img, rot, tran, intrin, post_rot, post_tran,
                          bda, mlp_input):
+        print('prepare_bev_feat')
         x, _ = self.image_encoder(img)
         bev_feat, depth = self.img_view_transformer(
             [x, rot, tran, intrin, post_rot, post_tran, bda, mlp_input])
@@ -370,7 +373,10 @@ class BEVDet4D(BEVDet):
         return bev_feat, depth
 
     def extract_img_feat_sequential(self, inputs, feat_prev):
+        print('Hello from bevdet4d extract_img_feat_sequential')
+        # print(f'input len is {len(inputs)}')
         imgs, sensor2keyegos_curr, ego2globals_curr, intrins = inputs[:4]
+        # print(f'imgs len is {len(imgs)}')
         sensor2keyegos_prev, _, post_rots, post_trans, bda = inputs[4:]
         bev_feat_list = []
         mlp_input = self.img_view_transformer.get_mlp_input(
@@ -379,7 +385,8 @@ class BEVDet4D(BEVDet):
         inputs_curr = (imgs, sensor2keyegos_curr[0:1, ...],
                        ego2globals_curr[0:1, ...], intrins, post_rots,
                        post_trans, bda[0:1, ...], mlp_input)
-        bev_feat, depth = self.prepare_bev_feat(*inputs_curr)
+        # inside image encoder and view_transformer 
+        bev_feat, depth = self.prepare_bev_feat(*inputs_curr) # extract curr bev_feat
         bev_feat_list.append(bev_feat)
 
         # align the feat_prev
@@ -395,6 +402,7 @@ class BEVDet4D(BEVDet):
         return [x], depth
 
     def prepare_inputs(self, inputs, stereo=False):
+        print("prepare_inputs")
         # split the inputs into each frame
         B, N, C, H, W = inputs[0].shape
         N = N // self.num_frame
@@ -453,11 +461,14 @@ class BEVDet4D(BEVDet):
                          pred_prev=False,
                          sequential=False,
                          **kwargs):
+        print("hello from bevdet4d extract_img_feat")
         if sequential:
+            print("hello from sequential")
             return self.extract_img_feat_sequential(img, kwargs['feat_prev'])
         imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, \
         bda, _ = self.prepare_inputs(img)
         """Extract features of images."""
+        print('rest of extract_img_feat')
         bev_feat_list = []
         depth_list = []
         key_frame = True  # back propagation for key frame only
@@ -478,10 +489,12 @@ class BEVDet4D(BEVDet):
             else:
                 bev_feat = torch.zeros_like(bev_feat_list[0])
                 depth = None
+            print("append bev_feat and depth")
             bev_feat_list.append(bev_feat)
             depth_list.append(depth)
             key_frame = False
         if pred_prev:
+            print('pred prev part')
             assert self.align_after_view_transfromation
             assert sensor2keyegos[0].shape[0] == 1
             feat_prev = torch.cat(bev_feat_list[1:], dim=0)
@@ -499,6 +512,7 @@ class BEVDet4D(BEVDet):
                                post_rots[0], post_trans[0],
                                bda_curr]
         if self.align_after_view_transfromation:
+            print('align_after_view_transform')
             for adj_id in range(1, self.num_frame):
                 bev_feat_list[adj_id] = \
                     self.shift_feature(bev_feat_list[adj_id],
@@ -507,6 +521,7 @@ class BEVDet4D(BEVDet):
                                        bda)
         bev_feat = torch.cat(bev_feat_list, dim=1)
         x = self.bev_encoder(bev_feat)
+        print('return bev_encoder output and depth list ')
         return [x], depth_list[0]
 
 
@@ -532,6 +547,9 @@ class BEVDet4DTRT(BEVDet4D):
     def forward(
         self,
         img,
+        feat_prev,
+        sensor2keyegos,
+        bda,
         ranks_depth,
         ranks_feat,
         ranks_bev,
@@ -545,20 +563,37 @@ class BEVDet4DTRT(BEVDet4D):
 
 
         # example from bevdet
-        x = self.img_backbone(img)
-        x = self.img_neck(x)
-        x = self.img_view_transformer.depth_net(x)
+        x = self.img_backbone(img) # extract features from input images 
+        x = self.img_neck(x) # compress img feature
+        x = self.img_view_transformer.depth_net(x) # estimate depth
         depth = x[:, :self.img_view_transformer.D].softmax(dim=1)
+        # transform feature
         tran_feat = x[:, self.img_view_transformer.D:(
             self.img_view_transformer.D +
             self.img_view_transformer.out_channels)]
         tran_feat = tran_feat.permute(0, 2, 3, 1)
+        # apply pooling operation
         x = TRTBEVPoolv2.apply(depth.contiguous(), tran_feat.contiguous(),
                                ranks_depth, ranks_feat, ranks_bev,
                                interval_starts, interval_lengths)
         x = x.permute(0, 3, 1, 2).contiguous()
-
-        bev_feat = self.bev_encoder(x)
+        curr_bev_feat = x # should be in output for using in next frame 
+        bev_feat_list = []
+        bev_feat_list.append(curr_bev_feat)
+        # align prev_feat
+        sensor2keyegos_curr = \
+                sensor2keyegos[0].repeat(self.num_frame - 1, 1, 1, 1)
+        sensor2keyegos_prev = torch.cat(sensor2keyegos[1:], dim=0)
+        _, C, H, W = feat_prev.shape
+        feat_prev = \
+            self.shift_feature(feat_prev,
+                               [sensor2keyegos_curr, sensor2keyegos_prev],
+                               bda)
+        bev_feat_list.append(feat_prev.view(1, (self.num_frame - 1) * C, H, W))        
+        #cat prev features with current features
+        bev_feat = torch.cat(bev_feat_list, dim=1)
+        # apply bev_encoder
+        bev_feat = self.bev_encoder(bev_feat)
         outs = self.pts_bbox_head([bev_feat])
         outs = self.result_serialize(outs)
         return outs
@@ -571,8 +606,12 @@ class BEVDet4DTRT(BEVDet4D):
         for inp in input:
             print(f'input type is {type(inp)}')
         print(f'input len is {len(input)}')
-        coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
-        return self.img_view_transformer.voxel_pooling_prepare_v2(coor)
+        # coor = self.img_view_transformer.get_lidar_coor(*input[1:7]) # error because list 
+        coor = self.img_view_transformer.get_lidar_coor(*[x[0] for x in input[1:7]])
+        # return meta data for formward method ranks 
+        # input[1] sensor2keyegos
+        # input[6] bda
+        return self.img_view_transformer.voxel_pooling_prepare_v2(coor), input[1], input[6]
 
 
 @DETECTORS.register_module()
