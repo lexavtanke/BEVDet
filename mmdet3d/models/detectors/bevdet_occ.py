@@ -2,6 +2,7 @@
 from .bevdet import BEVStereo4D
 
 import torch
+from mmdet3d.ops.bev_pool_v2.bev_pool import TRTBEVPoolv2
 from mmdet.models import DETECTORS
 from mmdet.models.builder import build_loss
 from mmcv.cnn.bricks.conv_module import ConvModule
@@ -70,6 +71,7 @@ class BEVStereo4DOCC(BEVStereo4D):
                     rescale=False,
                     **kwargs):
         """Test function without augmentaiton."""
+        print('BEVStereo4DOCC simple_test')
         img_feats, _, _ = self.extract_feat(
             points, img=img, img_metas=img_metas, **kwargs)
         occ_pred = self.final_conv(img_feats[0]).permute(0, 4, 3, 2, 1)
@@ -136,5 +138,80 @@ class BEVStereo4DOCC(BEVStereo4D):
 
 
 @DETECTORS.register_module()
-class BEVStereo4DOCCTRT(BEVStereo4D):
-    pass
+class BEVStereo4DOCCTRT(BEVStereo4DOCC):
+    def forward(
+        self,
+        img,
+        feat_prev,
+        stereo_feat_prev,
+        mlp_input,
+        ranks_depth,
+        ranks_feat,
+        ranks_bev,
+        interval_starts,
+        interval_lengths,
+    ):
+        # actually logic is to get batch of images 
+        # extract features from each of them 
+        # alight features with ego transform information
+        # concatenate 
+
+
+        # example from bevdet
+        # x = self.img_backbone(img) # extract features from input images 
+        # stereo_feat = x[0]
+        # x = x[1:]
+        # x = self.img_neck(x) # compress img featuremlp_input
+        print("_____________forward method_____________")
+        print(img.shape)
+
+        x, stereo_feat = self.image_encoder(img, stereo=True)
+        
+        x = self.img_view_transformer.depth_net(x, mlp_input,
+                                                 [stereo_feat_prev, stereo_feat]) # estimate depth
+        depth = x[:, :self.img_view_transformer.D].softmax(dim=1)
+        # transform feature
+        tran_feat = x[:, self.img_view_transformer.D:(
+            self.img_view_transformer.D +
+            self.img_view_transformer.out_channels)]
+        tran_feat = tran_feat.permute(0, 2, 3, 1)
+        # apply pooling operation
+        x = TRTBEVPoolv2.apply(depth.contiguous(), tran_feat.contiguous(),
+                               ranks_depth, ranks_feat, ranks_bev,
+                               interval_starts, interval_lengths)
+        x = x.permute(0, 3, 1, 2).contiguous()
+        curr_bev_feat = x # should be in output for using in next frame 
+        bev_feat_list = []
+        bev_feat_list.append(curr_bev_feat)
+        _, C, H, W = feat_prev.shape
+        bev_feat_list.append(feat_prev.view(1, (self.num_frame - 1) * C, H, W))        
+        #cat prev features with current features
+        bev_feat = torch.cat(bev_feat_list, dim=1)
+        # apply bev_encoder
+        bev_feat = self.bev_encoder(bev_feat)
+
+        # occ head 
+        # outs = self.pts_bbox_head([bev_feat])
+        # outs = self.result_serialize(outs + (bev_feat,))
+
+        occ_pred = self.final_conv(bev_feat[0]).permute(0, 4, 3, 2, 1)
+        occ_pred = self.predicter(occ_pred)
+        return occ_pred, curr_bev_feat, stereo_feat
+    
+    def get_bev_pool_input(self, input):
+        input = self.prepare_inputs(input)
+        # print('________________________________')
+        # print(f'type is {type(input[0][0])}')
+        # print(input[0][0].shape)
+        # for inp in input:
+        #     print(f'input type is {type(inp)}')
+        # print(f'input len is {len(input)}')
+        # coor = self.img_view_transformer.get_lidar_coor(*input[1:7]) # error because list 
+        coor = self.img_view_transformer.get_lidar_coor(*[x[0] for x in input[1:7]])
+        # return meta data for formward method ranks 
+        # input[1] sensor2keyegos
+        # input[6] bda
+        return self.img_view_transformer.voxel_pooling_prepare_v2(coor), input[1], input[6]
+
+
+        

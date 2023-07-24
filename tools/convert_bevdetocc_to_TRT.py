@@ -347,9 +347,13 @@ def main():
     cfg.model.train_cfg = None
     cfg.model.align_after_view_transfromation=True
     model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
-    assert model.img_view_transformer.grid_size[0] == 128
-    assert model.img_view_transformer.grid_size[1] == 128
-    assert model.img_view_transformer.grid_size[2] == 1
+    # print("grid_size")
+    # print(model.img_view_transformer.grid_size[0])
+    # print(model.img_view_transformer.grid_size[1])
+    # print(model.img_view_transformer.grid_size[2])
+    assert model.img_view_transformer.grid_size[0] == 200 #128
+    assert model.img_view_transformer.grid_size[1] == 200 #128
+    assert model.img_view_transformer.grid_size[2] == 16 #1
     load_checkpoint(model, args.checkpoint, map_location='cpu')
     if args.fuse_conv_bn:
         model_prefix = model_prefix + '_fuse'
@@ -366,31 +370,54 @@ def main():
 
         
         inputs = [t.cuda() for t in data['img_inputs'][0]]
-        # print('==================')
-        # print(len(inputs))
+        print('==================')
+        print(len(inputs))
         # prepare inputs for firing weight of the model 
         metas, sensor2keyegos, bda = model.get_bev_pool_input(inputs)
-        img = inputs[0].squeeze(0)
+        
+        imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, \
+        bda, curr2adjsensor = model.prepare_inputs(inputs, stereo=True)
+        
+        img, sensor2keyego, ego2global, intrin, post_rot, post_tran = \
+                imgs[0], sensor2keyegos[0], ego2globals[0], intrins[0], \
+                post_rots[0], post_trans[0]
+        
+        mlp_input = model.img_view_transformer.get_mlp_input(
+                    sensor2keyegos[0], ego2globals[0], intrin,
+                    post_rot, post_tran, bda)
+        feat_prev_iv = None
+        extra_ref_frame = False 
+        inputs_curr = (img, sensor2keyego, ego2global, intrin,
+                               post_rot, post_tran, bda, mlp_input,
+                               feat_prev_iv, curr2adjsensor[0],
+                               extra_ref_frame)
+        
         
         with torch.no_grad():
-            feat_prev, inputs = model.extract_img_feat(
-                inputs, pred_prev=True, img_metas=None)
+            feat_prev, depth,stereo_feat_prev = model.prepare_bev_feat(*inputs_curr)
         # print(f'feat_prev shape is {feat_prev.shape}')
+        # img = inputs[0].squeeze(0)
+        img = inputs[0]
+        print(f'img shape before callting model is {img.shape}')
+        print(f'before squeeze {inputs[0].shape}')
+        
         with torch.no_grad():
             torch.onnx.export(
                 model,
                 (img.float().contiguous(), feat_prev.float().contiguous(),
+                 stereo_feat_prev.float().contiguous(), mlp_input.float().contiguous(),
                  metas[1].int().contiguous(),
                  metas[2].int().contiguous(), metas[0].int().contiguous(),
                  metas[3].int().contiguous(), metas[4].int().contiguous()),
                 args.work_dir + model_prefix + '.onnx',
                 opset_version=11,
                 input_names=[
-                    'img', 'feat_prev', 'ranks_depth', 'ranks_feat', 'ranks_bev',
+                    'img', 'feat_prev', 'stereo_feat_prev', 'mlp_input',
+                    'ranks_depth', 'ranks_feat', 'ranks_bev',
                     'interval_starts', 'interval_lengths'
                 ],
                 output_names=[f'output_{j}' for j in
-                              range(6 * len(model.pts_bbox_head.task_heads) + 1)])
+                              range(3)])
         break
     # check onnx model
     onnx_model = onnx.load(args.work_dir + model_prefix + '.onnx')
