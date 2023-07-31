@@ -5,6 +5,7 @@ import argparse
 
 import torch
 import torch.onnx
+from onnxruntime.tools import pytorch_export_contrib_ops
 from mmcv import Config
 from mmdeploy.backend.tensorrt.utils import save, search_cuda_version
 
@@ -89,7 +90,7 @@ def parse_args():
     parser.add_argument('checkpoint', help='checkpoint file')
     parser.add_argument('work_dir', help='work dir to save file')
     parser.add_argument(
-        '--prefix', default='bevdet4d', help='prefix of the save file name')
+        '--prefix', default='bevdet4d_occ', help='prefix of the save file name')
     parser.add_argument(
         '--fp16', action='store_true', help='Whether to use tensorrt fp16')
     parser.add_argument(
@@ -370,10 +371,10 @@ def main():
 
         
         inputs = [t.cuda() for t in data['img_inputs'][0]]
-        print('==================')
-        print(len(inputs))
+        # print('==================')
+        # print(len(inputs))
         # prepare inputs for firing weight of the model 
-        metas, sensor2keyegos, bda = model.get_bev_pool_input(inputs)
+        metas = model.get_bev_pool_input(inputs)
         
         imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, \
         bda, curr2adjsensor = model.prepare_inputs(inputs, stereo=True)
@@ -385,6 +386,7 @@ def main():
         mlp_input = model.img_view_transformer.get_mlp_input(
                     sensor2keyegos[0], ego2globals[0], intrin,
                     post_rot, post_tran, bda)
+        # print(f'mlp_input shape is {mlp_input.shape}')
         feat_prev_iv = None
         extra_ref_frame = False 
         inputs_curr = (img, sensor2keyego, ego2global, intrin,
@@ -394,18 +396,33 @@ def main():
         
         
         with torch.no_grad():
-            feat_prev, depth,stereo_feat_prev = model.prepare_bev_feat(*inputs_curr)
+            feat_prev, depth, stereo_feat_prev = model.prepare_bev_feat(*inputs_curr)
         # print(f'feat_prev shape is {feat_prev.shape}')
-        # img = inputs[0].squeeze(0)
-        img = inputs[0]
-        print(f'img shape before callting model is {img.shape}')
-        print(f'before squeeze {inputs[0].shape}')
+        # print(f'stereo_feat_prev shape is {stereo_feat_prev.shape}')
+        # print(f'curr2adjsensor[0] shape is {curr2adjsensor[0].shape}')
+        img = inputs[0].squeeze(0)
+        # img = inputs[0]
+        # print(f'img shape before callting model is {img.shape}')
+        # print(f'before squeeze {inputs[0].shape}')
+
+        stereo_metas = {'cv_feat_list' : [stereo_feat_prev, stereo_feat],
+                'post_trans' : post_tran,
+                'post_rots' : post_rot,  
+                'k2s_sensor' : k2s_sensor,
+                'intrins' : intrin,
+                'frustum' : model.img_view_transformer.cv_frustum.to(x)}
+
+
+        cost_volumn = model.img_view_transformer.depth_net.calculate_cost_volum()
         
         with torch.no_grad():
+            # pytorch_export_contrib_ops.register()
             torch.onnx.export(
                 model,
                 (img.float().contiguous(), feat_prev.float().contiguous(),
                  stereo_feat_prev.float().contiguous(), mlp_input.float().contiguous(),
+                 post_tran.float().contiguous(), post_rot.float().contiguous(),
+                 curr2adjsensor[0].float(), intrin.float().contiguous(),
                  metas[1].int().contiguous(),
                  metas[2].int().contiguous(), metas[0].int().contiguous(),
                  metas[3].int().contiguous(), metas[4].int().contiguous()),
@@ -413,6 +430,7 @@ def main():
                 opset_version=11,
                 input_names=[
                     'img', 'feat_prev', 'stereo_feat_prev', 'mlp_input',
+                    'post_tran', 'post_rot', 'curr2adjsensor', 'intrin',
                     'ranks_depth', 'ranks_feat', 'ranks_bev',
                     'interval_starts', 'interval_lengths'
                 ],
