@@ -11,19 +11,19 @@ ENV FORCE_CUDA="1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-### change the system source for installing libs
-ARG USE_SRC_INSIDE=false
-RUN if [ ${USE_SRC_INSIDE} == true ] ; \
-    then \
-        sed -i s/archive.ubuntu.com/mirrors.aliyun.com/g /etc/apt/sources.list ; \
-        sed -i s/security.ubuntu.com/mirrors.aliyun.com/g /etc/apt/sources.list ; \
-        echo "Use aliyun source for installing libs" ; \
-    else \
-        echo "Keep the download source unchanged" ; \
-    fi
+# ### change the system source for installing libs
+# ARG USE_SRC_INSIDE=false
+# RUN if [ ${USE_SRC_INSIDE} == true ] ; \
+#     then \
+#         sed -i s/archive.ubuntu.com/mirrors.aliyun.com/g /etc/apt/sources.list ; \
+#         sed -i s/security.ubuntu.com/mirrors.aliyun.com/g /etc/apt/sources.list ; \
+#         echo "Use aliyun source for installing libs" ; \
+#     else \
+#         echo "Keep the download source unchanged" ; \
+#     fi
 
-### update apt and install libs
-RUN sed -i s:/archive.ubuntu.com:/mirrors.tuna.tsinghua.edu.cn/ubuntu:g /etc/apt/sources.list
+# ### update apt and install libs
+# RUN sed -i s:/archive.ubuntu.com:/mirrors.tuna.tsinghua.edu.cn/ubuntu:g /etc/apt/sources.list
 RUN cat /etc/apt/sources.list
 RUN chmod 777 /tmp
 RUN apt-get clean && apt-get update &&\
@@ -38,7 +38,7 @@ RUN curl -fsSL -v -o ~/miniconda.sh -O  https://repo.anaconda.com/miniconda/Mini
     /opt/conda/bin/conda clean -ya
 
 ### pytorch
-RUN /opt/conda/bin/conda install pytorch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} cudatoolkit=${CUDA} -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/linux-64/
+RUN /opt/conda/bin/conda install pytorch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} cudatoolkit=${CUDA} -c pytorch -c nvidia 
 ENV PATH /opt/conda/bin:$PATH
 
 ### install mmcv-full
@@ -109,5 +109,33 @@ RUN pip install pycuda \
     plyfile \
     scikit-image \
     tensorboard \
-    trimesh==2.35.39 -i https://pypi.tuna.tsinghua.edu.cn/simple
+    transforms3d \
+    trimesh==2.35.39 
 
+# install packages
+RUN apt-get update && apt-get install -q -y --no-install-recommends \
+    dirmngr \
+    gnupg2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# setup sources.list
+RUN echo "deb http://packages.ros.org/ros2/ubuntu focal main" > /etc/apt/sources.list.d/ros2-latest.list
+
+# setup keys
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+
+# setup environment
+ENV LANG C.UTF-8
+ENV LC_ALL C.UTF-8
+
+ENV ROS_DISTRO galactic
+
+# install ros2 packages
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ros-galactic-desktop \
+    && rm -rf /var/lib/apt/lists/*
+
+# setup entrypoint
+COPY ./ros_entrypoint.sh /
+
+ENTRYPOINT ["/ros_entrypoint.sh"]

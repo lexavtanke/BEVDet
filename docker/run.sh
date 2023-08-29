@@ -23,13 +23,17 @@ touch $XAUTH
 xauth nlist $DISPLAY | sed -e 's/^..../ffff/' | xauth -f $XAUTH nmerge -
 
 # specify the image, very important
-IMAGE="bevdet:latest"
+IMAGE="ros_bevdet:latest"
 RUNTIME=$runtime
 
-docker run ${RUNTIME} -it --rm \
+docker run ${RUNTIME} -it  \
         -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+            --network=host --ipc=host --pid=host \
+            --env UID=$(id -u) \
+            --env GID=$(id -g) \
             --volume=${REPO_ROOT}/:/root/workspace/BEVDET \
             --volume=/home/alex/datasets/nuscenes:/root/workspace/BEVDET/data/nuscenes \
+            --volume=/home/alex/projects/ml_occ_node:/root/workspace/ml_occ_node \
             --shm-size 16g \
 	    --entrypoint /bin/bash \
             ${IMAGE}

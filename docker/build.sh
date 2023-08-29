@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker build -t bevdet:latest  .
+docker build -t ros_bevdet:latest  .
